@@ -1,15 +1,14 @@
 from os import name
-from tensorflow.keras.layers import Layer
+from keras.layers import Layer
 import tensorflow as tf
 import numpy as np
-import tensorflow.keras.backend as K
 
 
 class NLL(Layer):
     """Negative Log Likelihood Loss Layer"""
 
     def __init__(self, mode, sig2e, sig2bs, rhos = [], weibull_init = [], est_cors = [], Z_non_linear=False, dist_matrix=None):
-        super(NLL, self).__init__(dynamic=False)
+        super(NLL, self).__init__()
         self.sig2bs = tf.Variable(
             sig2bs, name='sig2bs', constraint=lambda x: tf.clip_by_value(x, 1e-18, np.infty))
         self.Z_non_linear = Z_non_linear
@@ -63,6 +62,9 @@ class NLL(Layer):
     
     def get_indices(self, N, Z_idx, min_Z):
         return tf.stack([tf.range(N, dtype=tf.int64), Z_idx - min_Z], axis=1)
+#        n_range = tf.cast(tf.range(N), tf.int64)
+#        z_vals = tf.cast(tf.squeeze(Z_idx), tf.int64) - tf.cast(min_Z, tf.int64)
+#        return tf.stack([n_range, z_vals], axis=1)
 
     def get_indices_v1(self, N, Z_idx):
         return tf.stack([tf.range(N, dtype=tf.int64), Z_idx], axis=1)
@@ -70,14 +72,14 @@ class NLL(Layer):
     def getZ(self, N, Z_idx, min_Z, max_Z):
         if self.Z_non_linear:
             return Z_idx
-        Z_idx = K.squeeze(Z_idx, axis=1)
+        Z_idx = tf.squeeze(Z_idx, axis=1)
         indices = self.get_indices(N, Z_idx, min_Z)
         return tf.sparse.to_dense(tf.sparse.SparseTensor(indices, tf.ones(N), (N, max_Z - min_Z + 1)))
     
     def getZ_v1(self, N, Z_idx):
         if self.Z_non_linear:
             return Z_idx
-        Z_idx = K.squeeze(Z_idx, axis=1)
+        Z_idx = tf.squeeze(Z_idx, axis=1)
         indices = self.get_indices_v1(N, Z_idx)
         return tf.sparse.to_dense(tf.sparse.SparseTensor(indices, tf.ones(N), (N, tf.reduce_max(Z_idx) + 1)))
 
@@ -91,8 +93,8 @@ class NLL(Layer):
         return D
     
     def custom_loss_lm(self, y_true, y_pred, Z_idxs):
-        N = K.shape(y_true)[0]
-        V = self.sig2e * tf.eye(N)
+        N = tf.shape(y_true)[0]
+        V = self.sig2e * tf.eye(N, dtype=tf.float32)
         if self.mode in ['intercepts', 'spatial_embedded', 'spatial_and_categoricals']:
             categoricals_loc = 0
             if self.mode == 'spatial_and_categoricals':
@@ -105,20 +107,20 @@ class NLL(Layer):
                 sig2bs_loc = k
                 if self.mode == 'spatial_and_categoricals': # first 2 sig2bs go to kernel
                     sig2bs_loc += 2
-                V += self.sig2bs[sig2bs_loc] * K.dot(Z, K.transpose(Z))
+                V += self.sig2bs[sig2bs_loc] * tf.matmul(Z, Z, transpose_b=True)
         if self.mode == 'slopes':
             min_Z = tf.reduce_min(Z_idxs[0])
             max_Z = tf.reduce_max(Z_idxs[0])
             Z0 = self.getZ(N, Z_idxs[0], min_Z, max_Z)
             Z_list = [Z0]
             for k in range(1, len(self.sig2bs)):
-                T = tf.linalg.tensor_diag(K.squeeze(Z_idxs[1], axis=1) ** k)
-                Z = K.dot(T, Z0)
+                T = tf.linalg.tensor_diag(tf.squeeze(Z_idxs[1], axis=1) ** k)
+                Z = tf.matmul(T, Z0)
                 Z_list.append(Z)
             for k in range(len(self.sig2bs)):
                 for j in range(len(self.sig2bs)):
                     if k == j:
-                        sig = self.sig2bs[k] 
+                        sig = self.sig2bs[k]
                     else:
                         rho_symbol = ''.join(map(str, sorted([k, j])))
                         if rho_symbol in self.est_cors:
@@ -126,7 +128,7 @@ class NLL(Layer):
                             sig = rho * tf.math.sqrt(self.sig2bs[k]) * tf.math.sqrt(self.sig2bs[j])
                         else:
                             continue
-                    V += sig * K.dot(Z_list[j], K.transpose(Z_list[k]))
+                    V += sig * tf.matmul(Z_list[j], Z_list[k], transpose_b=True)
         if self.mode in ['spatial', 'spatial_and_categoricals']:
             # for expanded kernel experiments
             # min_Z = tf.maximum(tf.reduce_min(Z_idxs[0]) - self.spatial_delta, 0)
@@ -135,50 +137,50 @@ class NLL(Layer):
             max_Z = tf.reduce_max(Z_idxs[0])
             D = self.getD(min_Z, max_Z)
             Z = self.getZ(N, Z_idxs[0], min_Z, max_Z)
-            V += K.dot(Z, K.dot(D, K.transpose(Z)))
+            V += tf.matmul(Z, tf.matmul(D, Z, transpose_b=True))
         if self.Z_non_linear:
             V_inv = tf.linalg.inv(V)
-            V_inv_y = K.dot(V_inv, y_true - y_pred)
+            V_inv_y = tf.matmul(V_inv, y_true - y_pred)
         else:
             V_inv_y = tf.linalg.solve(V, y_true - y_pred)
-        loss2 = K.dot(K.transpose(y_true - y_pred), V_inv_y)
-        # loss1 = tf.math.log(tf.linalg.det(V))
-        _, loss1 = tf.linalg.slogdet(V)
-        total_loss = 0.5 * K.cast(N, tf.float32) * \
+        loss2 = tf.matmul(tf.transpose(y_true - y_pred), V_inv_y)
+        L = tf.linalg.cholesky(V)
+        loss1 = 2.0 * tf.reduce_sum(tf.math.log(tf.math.real(tf.linalg.diag_part(L))))
+        total_loss = 0.5 * tf.cast(N, tf.float32) * \
             np.log(2 * np.pi) + 0.5 * loss1 + 0.5 * loss2
         return total_loss
 
     def custom_loss_glm(self, y_true, y_pred, Z_idxs):
-        Z_idx = K.squeeze(Z_idxs[0], axis=1)
+        Z_idx = tf.squeeze(Z_idxs[0], axis=1)
         a, _ = tf.unique(Z_idx)
         i_sum = tf.zeros(shape=(1,1))
         for i in a:
             y_i = y_true[Z_idx == i]
             f_i = y_pred[Z_idx == i]
-            yf = K.dot(K.transpose(y_i), f_i)
+            yf = tf.matmul(y_i, f_i, transpose_a=True)
             k_sum = tf.zeros(shape=(1,1))
             for k in range(self.nGQ):
-                sqrt2_sigb_xk = np.sqrt(2) * tf.sqrt(self.sig2bs[0]) * self.x_ks[k]
-                y_sum_x = K.sum(y_i) * sqrt2_sigb_xk
-                log_gamma_sum = K.sum(K.log(1 + K.exp(f_i + sqrt2_sigb_xk)))
-                k_sum = k_sum + K.exp(yf + y_sum_x - log_gamma_sum) * self.w_ks[k] / np.sqrt(np.pi)
-            i_sum = i_sum + K.log(k_sum)
+                sqrt2_sigb_xk = np.sqrt(2.0) * tf.sqrt(self.sig2bs[0]) * self.x_ks[k]
+                y_sum_x = tf.sum(y_i) * sqrt2_sigb_xk
+                log_gamma_sum = tf.sum(tf.log(1.0 + tf.exp(f_i + sqrt2_sigb_xk)))
+                k_sum = k_sum + tf.exp(yf + y_sum_x - log_gamma_sum) * self.w_ks[k] / np.sqrt(np.pi)
+            i_sum = i_sum + tf.log(k_sum)
         return -i_sum
     
     def custom_loss_survival(self, y_true, y_pred, Z_idxs):
-        N = K.shape(y_true)[0]
+        N = tf.shape(y_true)[0]
         min_Z = tf.reduce_min(Z_idxs[0])
         max_Z = tf.reduce_max(Z_idxs[0])
         Z = self.getZ(N, Z_idxs[0], min_Z, max_Z)
         event = Z_idxs[1]
-        Z_idx = K.squeeze(Z_idxs[0], axis=1)
+        Z_idx = tf.squeeze(Z_idxs[0], axis=1)
         event_sums = tf.math.segment_sum(event, Z_idx - min_Z)
         Hs = self.weibull_lambda * tf.math.pow(y_true, self.weibull_nu)
         hs = self.weibull_lambda * self.weibull_nu * tf.math.pow(y_true, self.weibull_nu - 1)
-        sum_exps = K.dot(K.transpose(Z), tf.multiply(Hs, tf.math.exp(y_pred)))
+        sum_exps = tf.matmul(tf.transpose(Z), tf.multiply(Hs, tf.math.exp(y_pred)))
         l1 = tf.reduce_sum(event_sums * tf.math.log(self.sig2bs[0]) - tf.math.lgamma(1 / self.sig2bs[0]) + tf.math.lgamma(1 / self.sig2bs[0] + event_sums))
         l2 = tf.reduce_sum(tf.multiply(-(1 / self.sig2bs[0] + event_sums), tf.math.log(sum_exps * self.sig2bs[0] + 1)))
-        l3 = tf.reduce_sum(K.dot(K.transpose(Z), (y_pred + tf.math.log(hs)) * event))
+        l3 = tf.reduce_sum(tf.matmul(tf.transpose(Z), (y_pred + tf.math.log(hs)) * event))
         return -(l1 + l2 + l3)
     
     def compute_output_shape(self, input_shape):

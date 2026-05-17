@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 from scipy import sparse
 
-from tensorflow.keras import Model
+from keras import Model
 
 from lmmnn.utils import NNResult, get_cov_mat, get_dummies
 

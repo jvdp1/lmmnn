@@ -1,7 +1,7 @@
 import numpy as np
 from collections import Counter
 from sklearn.model_selection import train_test_split
-from tensorflow.keras import Model
+from keras import Model
 
 def get_feature_map(model, X):
     last_layer = Model(inputs = model.input, outputs = model.layers[-2].output)

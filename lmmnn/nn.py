@@ -11,11 +11,11 @@ except Exception:
     pass
 
 import tensorflow as tf
-import tensorflow.keras.backend as K
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense, Dropout, Embedding, Concatenate, Reshape, Input, Masking, LSTM, Conv2D, MaxPool2D, Flatten
-from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau, CSVLogger
-from tensorflow.keras import Model
+import keras.backend as K
+from keras.models import Sequential
+from keras.layers import Dense, Dropout, Embedding, Concatenate, Reshape, Input, Masking, LSTM, Conv2D, MaxPool2D, Flatten
+from keras.callbacks import EarlyStopping, ReduceLROnPlateau, CSVLogger
+from keras import Model
 import torch
 
 from lmmnn.utils import NNResult, get_dummies
