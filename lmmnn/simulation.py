@@ -158,6 +158,8 @@ def simulation(out_file, params):
     shuffle = params['shuffle'] if 'shuffle' in params else False
     if mode == 'intercepts':
         assert n_sig2bs == n_categoricals
+    elif mode == 'dense':
+        assert n_sig2bs == 1
     elif mode == 'slopes':
         assert n_categoricals == 1
         # assert n_rhos == len(estimated_cors)

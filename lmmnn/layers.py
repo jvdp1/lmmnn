@@ -13,7 +13,7 @@ class NLL(Layer):
             sig2bs, name='sig2bs', constraint=lambda x: tf.clip_by_value(x, 1e-18, np.infty))
         self.Z_non_linear = Z_non_linear
         self.mode = mode
-        if self.mode in ['intercepts', 'slopes', 'spatial', 'spatial_embedded', 'spatial_and_categoricals']:
+        if self.mode in ['intercepts', 'slopes', 'spatial', 'spatial_embedded', 'spatial_and_categoricals', 'dense']:
             self.sig2e = tf.Variable(
                 sig2e, name='sig2e', constraint=lambda x: tf.clip_by_value(x, 1e-18, np.infty))
             if self.mode in ['spatial', 'spatial_and_categoricals']:
@@ -35,7 +35,7 @@ class NLL(Layer):
                 weibull_init[1], name='weibull_nu', constraint=lambda x: tf.clip_by_value(x, 1e-5, np.infty))
 
     def get_vars(self):
-        if self.mode in ['intercepts', 'spatial', 'spatial_embedded', 'spatial_and_categoricals']:
+        if self.mode in ['intercepts', 'spatial', 'spatial_embedded', 'spatial_and_categoricals', 'dense']:
             return self.sig2e.numpy(), self.sig2bs.numpy(), [], []
         if self.mode == 'glmm':
             return None, self.sig2bs.numpy(), [], []
@@ -95,6 +95,9 @@ class NLL(Layer):
     def custom_loss_lm(self, y_true, y_pred, Z_idxs):
         N = tf.shape(y_true)[0]
         V = self.sig2e * tf.eye(N, dtype=tf.float32)
+        if self.mode == 'dense':
+            Z = tf.cast(Z_idxs[0], tf.float32)
+            V += self.sig2bs[0] * tf.matmul(Z, Z, transpose_b=True)
         if self.mode in ['intercepts', 'spatial_embedded', 'spatial_and_categoricals']:
             categoricals_loc = 0
             if self.mode == 'spatial_and_categoricals':

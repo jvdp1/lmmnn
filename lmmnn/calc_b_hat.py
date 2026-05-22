@@ -75,6 +75,15 @@ def calc_b_hat(X_train, y_train, y_pred_tr, qs, q_spatial, sig2e, sig2bs, sig2bs
                 b_hat = np.asarray(b_hat).reshape(gZ_train.shape[1])
         else:
             b_hat = single_random_intercept_b_hat(X_train, y_train, y_pred_tr, qs, sig2e, sig2bs)
+    elif mode == 'dense':
+        Z_cols = sorted(X_train.columns[X_train.columns.str.startswith('z_')].tolist())
+        if len(Z_cols) == 0:
+            raise ValueError("mode='dense' expects random-effect columns prefixed with 'z_'")
+        gZ_train = X_train[Z_cols].values
+        D = np.eye(gZ_train.shape[1]) * sig2bs[0]
+        V = gZ_train @ D @ gZ_train.T + np.eye(gZ_train.shape[0]) * sig2e
+        V_inv_y = np.linalg.solve(V, y_train.values - y_pred_tr)
+        b_hat = D @ gZ_train.T @ V_inv_y
     elif mode == 'slopes':
         q = qs[0]
         Z0 = get_dummies(X_train['z0'], q)
@@ -182,4 +191,3 @@ def single_random_intercept_b_hat(X_train, y_train, y_pred_tr, qs, sig2e, sig2bs
     b_hat = ns * sig2bs[0] * (y_train_bar - y_pred_bar) / (sig2e + ns * sig2bs[0])
     b_hat = np.array(b_hat)
     return b_hat
-

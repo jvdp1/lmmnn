@@ -58,6 +58,16 @@ def add_layers_functional(X_input, n_neurons, dropout, activation, input_dim):
     return X_input
 
 
+def get_keras_input_array(x):
+    if isinstance(x, (pd.Series, pd.DataFrame)):
+        x = x.to_numpy()
+    else:
+        x = np.asarray(x)
+    if x.ndim == 1:
+        x = x.reshape((-1, 1))
+    return x
+
+
 def process_one_hot_encoding(X_train, X_test, x_cols):
     z_cols = X_train.columns[X_train.columns.str.startswith('z')]
     X_train_new = X_train[x_cols]
@@ -446,7 +456,15 @@ def reg_nn_lmm(X_train, X_test, y_train, y_test, qs, q_spatial, x_cols, batch_si
         event_input = Input(shape=(1,))
         Z_inputs = [Z_input, event_input]
         n_sig2bs_init = 1
-    
+    elif mode == 'dense':
+        z_cols = sorted(X_train.columns[X_train.columns.str.startswith('z_')].tolist())
+        if len(z_cols) == 0:
+            raise ValueError("mode='dense' expects random-effect columns prefixed with 'z_'")
+        Z_inputs = [Input(shape=(len(z_cols),), dtype=tf.float32)]
+        n_sig2bs_init = 1
+    else:
+        raise ValueError(f"Unsupported mode '{mode}'.")
+
     out_hidden = add_layers_functional(X_input, n_neurons, dropout, activation, X_train[x_cols].shape[1])
     y_pred_output = Dense(1)(out_hidden)
     if Z_non_linear and (mode in ['intercepts', 'glmm', 'survival']):
@@ -484,20 +502,28 @@ def reg_nn_lmm(X_train, X_test, y_train, y_test, qs, q_spatial, x_cols, batch_si
         callbacks = [EarlyStopping(patience=patience, monitor='val_loss')]
     if log_params:
         callbacks.extend([LogEstParams(idx), CSVLogger('res_params.csv', append=True)])
-    if not Z_non_linear:
+    if not Z_non_linear and mode != 'dense':
         X_train.sort_values(by=z_cols, inplace=True)
         y_train = y_train[X_train.index]
     if mode == 'spatial_embedded':
         X_train_z_cols = [X_train[['D1', 'D2']]]
         X_test_z_cols = [X_test[['D1', 'D2']]]
+    elif mode == 'dense':
+        X_train_z_cols = [X_train[z_cols]]
+        X_test_z_cols = [X_test[z_cols]]
+        #X_train_z_cols = [X_train[z_col] for z_col in z_cols]
+        #X_test_z_cols = [X_test[z_col] for z_col in z_cols]
     else:
         X_train_z_cols = [X_train[z_col] for z_col in z_cols]
         X_test_z_cols = [X_test[z_col] for z_col in z_cols]
-    history = model.fit([X_train[x_cols], y_train] + X_train_z_cols, None,
+    y_train_input = get_keras_input_array(y_train)
+    train_inputs = [get_keras_input_array(X_train[x_cols]), y_train_input] + [get_keras_input_array(x) for x in X_train_z_cols]
+    history = model.fit(train_inputs, None,
                         batch_size=batch_size, epochs=epochs, validation_split=0.1,
                         callbacks=callbacks, verbose=verbose, shuffle=shuffle)
 
     sig2e_est, sig2b_ests, rho_ests, weibull_ests = model.layers[-1].get_vars()
+    print(sig2e_est, sig2b_ests)
     if mode in ['spatial', 'spatial_embedded']:
         sig2b_spatial_ests = sig2b_ests
         sig2b_ests = []
@@ -507,10 +533,11 @@ def reg_nn_lmm(X_train, X_test, y_train, y_test, qs, q_spatial, x_cols, batch_si
     else:
         sig2b_spatial_ests = []
     y_pred_tr = model.predict(
-        [X_train[x_cols], y_train] + X_train_z_cols, verbose=verbose).reshape(X_train.shape[0])
+        train_inputs, verbose=verbose).reshape(X_train.shape[0])
     b_hat = calc_b_hat(X_train, y_train, y_pred_tr, qs, q_spatial, sig2e_est, sig2b_ests, sig2b_spatial_ests,
                 Z_non_linear, model, ls, mode, rho_ests, est_cors, dist_matrix, weibull_ests, sample_n_train)
-    dummy_y_test = np.random.normal(size=y_test.shape)
+    dummy_y_test = np.random.normal(size=(X_test.shape[0], 1)).astype(np.float32)
+    test_inputs = [get_keras_input_array(X_test[x_cols]), dummy_y_test] + [get_keras_input_array(x) for x in X_test_z_cols]
     if mode in ['intercepts', 'glmm', 'spatial', 'spatial_and_categoricals']:
         if Z_non_linear or len(qs) > 1 or mode == 'spatial_and_categoricals':
             delta_loc = 0
@@ -529,17 +556,21 @@ def reg_nn_lmm(X_train, X_test, y_train, y_test, qs, q_spatial, x_cols, batch_si
                 Z_test = sparse.hstack(Z_tests)
             if mode == 'spatial_and_categoricals':
                 Z_test = sparse.hstack([Z_test, get_dummies(X_test['z0'], q_spatial)])
-            y_pred = model.predict([X_test[x_cols], dummy_y_test] + X_test_z_cols, verbose=verbose).reshape(
+            y_pred = model.predict(test_inputs, verbose=verbose).reshape(
                 X_test.shape[0]) + Z_test @ b_hat
         else:
             # if model input is that large, this 2nd call to predict may cause OOM due to GPU memory issues
             # if that is the case use tf.convert_to_tensor() explicitly with a call to model() without using predict() method
             # y_pred = model([tf.convert_to_tensor(X_test[x_cols]), tf.convert_to_tensor(dummy_y_test), tf.convert_to_tensor(X_test_z_cols[0])], training=False).numpy().reshape(
             #     X_test.shape[0]) + b_hat[X_test['z0']]
-            y_pred = model.predict([X_test[x_cols], dummy_y_test] + X_test_z_cols, verbose=verbose).reshape(
+            y_pred = model.predict(test_inputs, verbose=verbose).reshape(
                 X_test.shape[0]) + b_hat[X_test['z0']]
         if mode == 'glmm':
             y_pred = np.exp(y_pred)/(1 + np.exp(y_pred))
+    elif mode == 'dense':
+        Z_test = X_test[z_cols].values
+        y_pred = model.predict(test_inputs, verbose=verbose).reshape(
+            X_test.shape[0]) + Z_test @ b_hat
     elif mode == 'slopes':
         q = qs[0]
         Z0 = get_dummies(X_test['z0'], q)
@@ -549,16 +580,16 @@ def reg_nn_lmm(X_train, X_test, y_train, y_test, qs, q_spatial, x_cols, batch_si
         for k in range(1, len(sig2b_ests)):
             Z_list.append(sparse.spdiags(t ** k, 0, N, N) @ Z0)
         Z_test = sparse.hstack(Z_list)
-        y_pred = model.predict([X_test[x_cols], dummy_y_test] + X_test_z_cols, verbose=verbose).reshape(
+        y_pred = model.predict(test_inputs, verbose=verbose).reshape(
                 X_test.shape[0]) + Z_test @ b_hat
     elif mode == 'spatial_embedded':
         last_layer = Model(inputs = model.input[2], outputs = model.layers[-2].output)
         gZ_test = last_layer.predict(X_test_z_cols, verbose=verbose)
-        y_pred = model.predict([X_test[x_cols], dummy_y_test] + X_test_z_cols, verbose=verbose).reshape(
+        y_pred = model.predict(test_inputs, verbose=verbose).reshape(
                 X_test.shape[0]) + gZ_test @ b_hat
         sig2b_spatial_ests = np.concatenate([sig2b_spatial_ests, [np.nan]])
     elif mode == 'survival':
-        y_pred = model.predict([X_test[x_cols], dummy_y_test] + X_test_z_cols, verbose=verbose).reshape(
+        y_pred = model.predict(test_inputs, verbose=verbose).reshape(
                 X_test.shape[0])
         y_pred = y_pred + np.log(b_hat[X_test['z0']])
     return y_pred, (sig2e_est, list(sig2b_ests), list(sig2b_spatial_ests)), list(rho_ests), list(weibull_ests), len(history.history['loss'])
