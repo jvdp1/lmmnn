@@ -1,7 +1,18 @@
 from os import name
 from keras.layers import Layer
+from keras.constraints import Constraint
 import tensorflow as tf
 import numpy as np
+
+
+class ClipConstraint(Constraint):
+    def __init__(self, min_value, max_value=None):
+        self.min_value = min_value
+        self.max_value = max_value
+
+    def __call__(self, w):
+        max_value = np.inf if self.max_value is None else self.max_value
+        return tf.clip_by_value(w, self.min_value, max_value)
 
 
 class NLL(Layer):
@@ -9,30 +20,49 @@ class NLL(Layer):
 
     def __init__(self, mode, sig2e, sig2bs, rhos = [], weibull_init = [], est_cors = [], Z_non_linear=False, dist_matrix=None):
         super(NLL, self).__init__()
-        self.sig2bs = tf.Variable(
-            sig2bs, name='sig2bs', constraint=lambda x: tf.clip_by_value(x, 1e-18, np.infty))
+        sig2bs = np.asarray(sig2bs, dtype=np.float32)
+        rhos = np.asarray(rhos, dtype=np.float32)
+        weibull_init = np.asarray(weibull_init, dtype=np.float32)
+        self.sig2bs = self.add_weight(
+            name='sig2bs', shape=sig2bs.shape,
+            initializer=tf.keras.initializers.Constant(sig2bs),
+            trainable=True,
+            constraint=ClipConstraint(1e-18))
         self.Z_non_linear = Z_non_linear
         self.mode = mode
         if self.mode in ['intercepts', 'slopes', 'spatial', 'spatial_embedded', 'spatial_and_categoricals', 'dense']:
-            self.sig2e = tf.Variable(
-                sig2e, name='sig2e', constraint=lambda x: tf.clip_by_value(x, 1e-18, np.infty))
+            self.sig2e = self.add_weight(
+                name='sig2e', shape=(),
+                initializer=tf.keras.initializers.Constant(float(sig2e)),
+                trainable=True,
+                constraint=ClipConstraint(1e-18))
             if self.mode in ['spatial', 'spatial_and_categoricals']:
                 self.dist_matrix = dist_matrix
                 self.max_loc = dist_matrix.shape[1] - 1
                 self.spatial_delta = int(0.0 * dist_matrix.shape[1])
         if self.mode == 'slopes':
             if len(est_cors) > 0:
-                self.rhos = tf.Variable(
-                    rhos, name='rhos', constraint=lambda x: tf.clip_by_value(x, -1.0, 1.0))
+                self.rhos = self.add_weight(
+                    name='rhos', shape=rhos.shape,
+                    initializer=tf.keras.initializers.Constant(rhos),
+                    trainable=True,
+                    constraint=ClipConstraint(-1.0, 1.0))
             self.est_cors = est_cors
         if self.mode == 'glmm':
             self.nGQ = 5
             self.x_ks, self.w_ks = np.polynomial.hermite.hermgauss(self.nGQ)
         if self.mode == 'survival':
-            self.weibull_lambda = tf.Variable(
-                weibull_init[0], name='weibull_lambda', constraint=lambda x: tf.clip_by_value(x, 1e-5, np.infty))
-            self.weibull_nu = tf.Variable(
-                weibull_init[1], name='weibull_nu', constraint=lambda x: tf.clip_by_value(x, 1e-5, np.infty))
+            self.weibull_lambda = self.add_weight(
+                name='weibull_lambda', shape=(),
+                initializer=tf.keras.initializers.Constant(float(weibull_init[0])),
+                trainable=True,
+                constraint=ClipConstraint(1e-5))
+            self.weibull_nu = self.add_weight(
+                name='weibull_nu', shape=(),
+                initializer=tf.keras.initializers.Constant(float(weibull_init[1])),
+                trainable=True,
+                constraint=ClipConstraint(1e-5))
+        self.solve_jitter = tf.constant(1e-4, dtype=tf.float32)
 
     def get_vars(self):
         if self.mode in ['intercepts', 'spatial', 'spatial_embedded', 'spatial_and_categoricals', 'dense']:
@@ -141,6 +171,10 @@ class NLL(Layer):
             D = self.getD(min_Z, max_Z)
             Z = self.getZ(N, Z_idxs[0], min_Z, max_Z)
             V += tf.matmul(Z, tf.matmul(D, Z, transpose_b=True))
+        # Numerical jitter keeps the covariance solve stable when variance
+        # parameters get very small or Z Z^T is nearly singular.
+        V = 0.5 * (V + tf.transpose(V))
+        V += self.solve_jitter * tf.eye(N, dtype=tf.float32)
         if self.Z_non_linear:
             V_inv = tf.linalg.inv(V)
             V_inv_y = tf.matmul(V_inv, y_true - y_pred)
