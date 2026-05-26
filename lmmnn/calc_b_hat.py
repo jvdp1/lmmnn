@@ -5,6 +5,7 @@ from scipy import sparse
 from keras import Model
 
 from lmmnn.utils import NNResult, get_cov_mat, get_dummies
+from lmmnn.layers import SOLVE_JITTER
 
 
 def get_D_est(qs, sig2bs):
@@ -81,7 +82,7 @@ def calc_b_hat(X_train, y_train, y_pred_tr, qs, q_spatial, sig2e, sig2bs, sig2bs
             raise ValueError("mode='dense' expects random-effect columns prefixed with 'z_'")
         gZ_train = X_train[Z_cols].values
         D = np.eye(gZ_train.shape[1]) * sig2bs[0]
-        V = gZ_train @ D @ gZ_train.T + np.eye(gZ_train.shape[0]) * sig2e
+        V = gZ_train @ D @ gZ_train.T + np.eye(gZ_train.shape[0]) * (sig2e + SOLVE_JITTER)
         V_inv_y = np.linalg.solve(V, y_train.values - y_pred_tr)
         b_hat = D @ gZ_train.T @ V_inv_y
     elif mode == 'slopes':

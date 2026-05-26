@@ -4,6 +4,12 @@ from keras.constraints import Constraint
 import tensorflow as tf
 import numpy as np
 
+# Shared jitter value added to the diagonal of V before Cholesky solves.
+# Must be the same constant used in both the NLL training layer and calc_b_hat
+# so that the V used for variance-component estimation and the V used for BLUP
+# prediction are identical.
+SOLVE_JITTER = 1e-4
+
 
 class ClipConstraint(Constraint):
     def __init__(self, min_value, max_value=None):
@@ -62,7 +68,7 @@ class NLL(Layer):
                 initializer=tf.keras.initializers.Constant(float(weibull_init[1])),
                 trainable=True,
                 constraint=ClipConstraint(1e-5))
-        self.solve_jitter = tf.constant(1e-4, dtype=tf.float32)
+        self.solve_jitter = tf.constant(SOLVE_JITTER, dtype=tf.float32)
 
     def get_vars(self):
         if self.mode in ['intercepts', 'spatial', 'spatial_embedded', 'spatial_and_categoricals', 'dense']:
