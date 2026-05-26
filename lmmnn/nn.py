@@ -494,9 +494,10 @@ def reg_nn_lmm(X_train, X_test, y_train, y_test, qs, q_spatial, x_cols, batch_si
         z_mat = X_train[z_cols].to_numpy(dtype=np.float32)
         mean_diag_ZZt = float(np.mean(np.sum(z_mat ** 2, axis=1)))  # mean of diag(Z @ Z.T)
         sig2e_init_val = max(y_var * 0.5, 1e-6)
-        sig2b_init_val = max(y_var * 0.5 / mean_diag_ZZt, 1e-6) if mean_diag_ZZt > 0 else 1.0
+        sig2b_init_val = max(y_var * 0.5, 1e-6)
         sig2bs_init = np.array([sig2b_init_val], dtype=np.float32)
         sig2e_init_val_scalar = float(sig2e_init_val)
+        print('aaa ', y_var, sig2e_init_val_scalar, sig2b_init_val, mean_diag_ZZt)
     else:
         sig2bs_init = np.ones(n_sig2bs_init, dtype=np.float32)
         sig2e_init_val_scalar = 1.0
@@ -542,8 +543,9 @@ def reg_nn_lmm(X_train, X_test, y_train, y_test, qs, q_spatial, x_cols, batch_si
         X_test_z_cols = [X_test[z_col] for z_col in z_cols]
     y_train_input = get_keras_input_array(y_train)
     train_inputs = [get_keras_input_array(X_train[x_cols]), y_train_input] + [get_keras_input_array(x) for x in X_train_z_cols]
-    effective_batch_size = batch_size
     if mode == 'dense':
+        #effective_batch_size = X_train.shape[0]
+        effective_batch_size = batch_size
         dense_callbacks = [EarlyStopping(patience=patience, monitor='loss')]
         if log_params:
             dense_callbacks.extend([LogEstParams(idx), CSVLogger('res_params.csv', append=True)])
@@ -551,6 +553,7 @@ def reg_nn_lmm(X_train, X_test, y_train, y_test, qs, q_spatial, x_cols, batch_si
                             batch_size=effective_batch_size, epochs=epochs, validation_split=0.1,
                             callbacks=dense_callbacks, verbose=verbose, shuffle=shuffle)
     else:
+        effective_batch_size = batch_size
         history = model.fit(train_inputs, None,
                             batch_size=effective_batch_size, epochs=epochs, validation_split=0.1,
                             callbacks=callbacks, verbose=verbose, shuffle=shuffle)

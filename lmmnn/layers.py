@@ -177,9 +177,9 @@ class NLL(Layer):
             D = self.getD(min_Z, max_Z)
             Z = self.getZ(N, Z_idxs[0], min_Z, max_Z)
             V += tf.matmul(Z, tf.matmul(D, Z, transpose_b=True))
-        # Numerical jitter keeps the covariance solve stable when variance
-        # parameters get very small or Z Z^T is nearly singular.
-        V = 0.5 * (V + tf.transpose(V))
+        ## Numerical jitter keeps the covariance solve stable when variance
+        ## parameters get very small or Z Z^T is nearly singular.
+        #V = 0.5 * (V + tf.transpose(V))
         V += self.solve_jitter * tf.eye(N, dtype=tf.float32)
         if self.Z_non_linear:
             V_inv = tf.linalg.inv(V)
