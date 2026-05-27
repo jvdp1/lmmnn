@@ -489,16 +489,11 @@ def reg_nn_lmm(X_train, X_test, y_train, y_test, qs, q_spatial, x_cols, batch_si
     # component.
     if mode == 'dense':
         y_var = float(np.var(get_keras_input_array(y_train)))
-        z_mat = X_train[z_cols].to_numpy(dtype=np.float32)
-        mean_diag_ZZt = float(np.mean(np.sum(z_mat ** 2, axis=1)))  # mean of diag(Z @ Z.T)
-        sig2e_init_val = max(y_var * 0.7, 1e-6)
-        sig2b_init_val = max(y_var * 0.3, 1e-6)
-        sig2bs_init = np.array([sig2b_init_val], dtype=np.float32)
-        sig2e_init_val_scalar = float(sig2e_init_val)
-        print('aaa ', y_var, sig2e_init_val_scalar, sig2b_init_val, mean_diag_ZZt)
+        sig2e_init_val_scalar = float(max(y_var * 0.7, 1e-6))
+        sig2bs_init = np.array([max(y_var * 0.3, 1e-6)], dtype=np.float32)
     else:
-        sig2bs_init = np.ones(n_sig2bs_init, dtype=np.float32)
         sig2e_init_val_scalar = 1.0
+        sig2bs_init = np.ones(n_sig2bs_init, dtype=np.float32)
     rhos_init = np.zeros(len(est_cors), dtype=np.float32)
     weibull_init = np.ones(2, dtype=np.float32)
     nll = NLL(mode, sig2e_init_val_scalar, sig2bs_init, rhos_init, weibull_init, est_cors, Z_non_linear, dmatrix_tf)(
