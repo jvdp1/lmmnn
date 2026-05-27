@@ -90,9 +90,6 @@ class NLL(Layer):
     
     def get_indices(self, N, Z_idx, min_Z):
         return tf.stack([tf.range(N, dtype=tf.int64), Z_idx - min_Z], axis=1)
-#        n_range = tf.cast(tf.range(N), tf.int64)
-#        z_vals = tf.cast(tf.squeeze(Z_idx), tf.int64) - tf.cast(min_Z, tf.int64)
-#        return tf.stack([n_range, z_vals], axis=1)
 
     def get_indices_v1(self, N, Z_idx):
         return tf.stack([tf.range(N, dtype=tf.int64), Z_idx], axis=1)
