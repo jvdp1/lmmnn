@@ -486,21 +486,14 @@ def reg_nn_lmm(X_train, X_test, y_train, y_test, qs, q_spatial, x_cols, batch_si
         ls = None
     # Data-driven variance initialisation for mode='dense':
     # Split total phenotypic variance equally between sig2e and the genetic
-    # component.  sig2b is scaled so that sig2b * mean(diag(Z @ Z.T)) equals
-    # half the phenotypic variance.  All other modes keep the original
-    # uninformative init of 1.0.
+    # component.
     if mode == 'dense':
         y_var = float(np.var(get_keras_input_array(y_train)))
-        z_mat = X_train[z_cols].to_numpy(dtype=np.float32)
-        mean_diag_ZZt = float(np.mean(np.sum(z_mat ** 2, axis=1)))  # mean of diag(Z @ Z.T)
-        sig2e_init_val = max(y_var * 0.5, 1e-6)
-        sig2b_init_val = max(y_var * 0.5, 1e-6)
-        sig2bs_init = np.array([sig2b_init_val], dtype=np.float32)
-        sig2e_init_val_scalar = float(sig2e_init_val)
-        print('aaa ', y_var, sig2e_init_val_scalar, sig2b_init_val, mean_diag_ZZt)
+        sig2e_init_val_scalar = float(max(y_var * 0.7, 1e-6))
+        sig2bs_init = np.array([max(y_var * 0.3, 1e-6)], dtype=np.float32)
     else:
-        sig2bs_init = np.ones(n_sig2bs_init, dtype=np.float32)
         sig2e_init_val_scalar = 1.0
+        sig2bs_init = np.ones(n_sig2bs_init, dtype=np.float32)
     rhos_init = np.zeros(len(est_cors), dtype=np.float32)
     weibull_init = np.ones(2, dtype=np.float32)
     nll = NLL(mode, sig2e_init_val_scalar, sig2bs_init, rhos_init, weibull_init, est_cors, Z_non_linear, dmatrix_tf)(
@@ -511,12 +504,34 @@ def reg_nn_lmm(X_train, X_test, y_train, y_test, qs, q_spatial, x_cols, batch_si
         print('NLL trainable weights:', [w.name for w in nll_layer.trainable_weights])
         print('Model sigma weights:', [w.name for w in model.trainable_weights if 'sig2' in w.name])
         print('Initial variance parameters:', nll_layer.get_vars())
-    if mode in ['dense', 'intercepts', 'slopes', 'spatial', 'spatial_embedded', 'spatial_and_categoricals']:
-        sigma_weights = [w.name for w in model.trainable_weights if 'sig2' in w.name]
-        if not sigma_weights:
-            raise RuntimeError('Sigma parameters are not registered as trainable weights.')
 
-    model.compile(optimizer='adam')
+    # Use two Adam optimizers:
+    # one for NN weights (lr=1e-3)
+    # one for variance parameters (lr=1e-1)
+    # Variance parameters may have a very different loss curvature and converge much faster with a higher lr.
+    nn_optimizer = tf.keras.optimizers.Adam(learning_rate=1e-3)
+    sigma_optimizer = tf.keras.optimizers.Adam(learning_rate=1e-1)
+    sigma_weight_names = {w.name for w in model.trainable_weights if 'sig2' in w.name or 'rho' in w.name}
+
+    class biLRModel(model.__class__):
+        def train_step(self, data):
+            x = data[0] if isinstance(data, (list, tuple)) else data
+            with tf.GradientTape() as tape:
+                y_pred = self(x, training=True)
+                loss = tf.reduce_sum(self.losses)
+            grads = tape.gradient(loss, self.trainable_weights)
+            nn_pairs = [(g, w) for g, w in zip(grads, self.trainable_weights)
+                        if w.name not in sigma_weight_names and g is not None]
+            sigma_pairs = [(g, w) for g, w in zip(grads, self.trainable_weights)
+                           if w.name in sigma_weight_names and g is not None]
+            if nn_pairs:
+                nn_optimizer.apply_gradients(nn_pairs)
+            if sigma_pairs:
+                sigma_optimizer.apply_gradients(sigma_pairs)
+            return {'loss': loss}
+
+    model.__class__ = biLRModel
+    model.compile(optimizer=nn_optimizer)  # needed for callbacks/metrics infrastructure
 
     patience = epochs if patience is None else patience
     if Z_non_linear and mode == 'intercepts':
@@ -543,23 +558,11 @@ def reg_nn_lmm(X_train, X_test, y_train, y_test, qs, q_spatial, x_cols, batch_si
         X_test_z_cols = [X_test[z_col] for z_col in z_cols]
     y_train_input = get_keras_input_array(y_train)
     train_inputs = [get_keras_input_array(X_train[x_cols]), y_train_input] + [get_keras_input_array(x) for x in X_train_z_cols]
-    if mode == 'dense':
-        #effective_batch_size = X_train.shape[0]
-        effective_batch_size = batch_size
-        dense_callbacks = [EarlyStopping(patience=patience, monitor='loss')]
-        if log_params:
-            dense_callbacks.extend([LogEstParams(idx), CSVLogger('res_params.csv', append=True)])
-        history = model.fit(train_inputs, None,
-                            batch_size=effective_batch_size, epochs=epochs, validation_split=0.1,
-                            callbacks=dense_callbacks, verbose=verbose, shuffle=shuffle)
-    else:
-        effective_batch_size = batch_size
-        history = model.fit(train_inputs, None,
-                            batch_size=effective_batch_size, epochs=epochs, validation_split=0.1,
-                            callbacks=callbacks, verbose=verbose, shuffle=shuffle)
+    history = model.fit(train_inputs, None,
+                        batch_size=batch_size, epochs=epochs, validation_split=0.1,
+                        callbacks=callbacks, verbose=verbose, shuffle=shuffle)
 
     sig2e_est, sig2b_ests, rho_ests, weibull_ests = model.layers[-1].get_vars()
-    print(sig2e_est, sig2b_ests)
     if mode in ['spatial', 'spatial_embedded']:
         sig2b_spatial_ests = sig2b_ests
         sig2b_ests = []
