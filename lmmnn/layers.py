@@ -4,13 +4,6 @@ from keras.constraints import Constraint
 import tensorflow as tf
 import numpy as np
 
-# Shared jitter value added to the diagonal of V before Cholesky solves.
-# Must be the same constant used in both the NLL training layer and calc_b_hat
-# so that the V used for variance-component estimation and the V used for BLUP
-# prediction are identical.
-SOLVE_JITTER = 1e-4
-
-
 class ClipConstraint(Constraint):
     def __init__(self, min_value, max_value=None):
         self.min_value = min_value
@@ -68,7 +61,6 @@ class NLL(Layer):
                 initializer=tf.keras.initializers.Constant(float(weibull_init[1])),
                 trainable=True,
                 constraint=ClipConstraint(1e-5))
-        self.solve_jitter = tf.constant(SOLVE_JITTER, dtype=tf.float32)
 
     def get_vars(self):
         if self.mode in ['intercepts', 'spatial', 'spatial_embedded', 'spatial_and_categoricals', 'dense']:
@@ -177,10 +169,6 @@ class NLL(Layer):
             D = self.getD(min_Z, max_Z)
             Z = self.getZ(N, Z_idxs[0], min_Z, max_Z)
             V += tf.matmul(Z, tf.matmul(D, Z, transpose_b=True))
-        ## Numerical jitter keeps the covariance solve stable when variance
-        ## parameters get very small or Z Z^T is nearly singular.
-        #V = 0.5 * (V + tf.transpose(V))
-        V += self.solve_jitter * tf.eye(N, dtype=tf.float32)
         if self.Z_non_linear:
             V_inv = tf.linalg.inv(V)
             V_inv_y = tf.matmul(V_inv, y_true - y_pred)
