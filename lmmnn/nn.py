@@ -457,9 +457,9 @@ def reg_nn_lmm(X_train, X_test, y_train, y_test, qs, q_spatial, x_cols, batch_si
         Z_inputs = [Z_input, event_input]
         n_sig2bs_init = 1
     elif mode == 'dense':
-        z_cols = sorted(X_train.columns[X_train.columns.str.startswith('z_')].tolist())
+        z_cols = sorted(X_train.columns[X_train.columns.str.startswith('d_')].tolist())
         if len(z_cols) == 0:
-            raise ValueError("mode='dense' expects random-effect columns prefixed with 'z_'")
+            raise ValueError("mode='dense' expects random-effect columns prefixed with 'd_'")
         Z_inputs = [Input(shape=(len(z_cols),), dtype=tf.float32)]
         n_sig2bs_init = 1
     else:

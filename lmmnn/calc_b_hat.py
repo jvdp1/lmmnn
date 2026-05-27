@@ -76,10 +76,10 @@ def calc_b_hat(X_train, y_train, y_pred_tr, qs, q_spatial, sig2e, sig2bs, sig2bs
         else:
             b_hat = single_random_intercept_b_hat(X_train, y_train, y_pred_tr, qs, sig2e, sig2bs)
     elif mode == 'dense':
-        Z_cols = sorted(X_train.columns[X_train.columns.str.startswith('z_')].tolist())
-        if len(Z_cols) == 0:
-            raise ValueError("mode='dense' expects random-effect columns prefixed with 'z_'")
-        gZ_train = X_train[Z_cols].values
+        z_cols = sorted(X_train.columns[X_train.columns.str.startswith('d_')].tolist())
+        if len(z_cols) == 0:
+            raise ValueError("mode='dense' expects random-effect columns prefixed with 'd_'")
+        gZ_train = X_train[z_cols].values
         D = np.eye(gZ_train.shape[1]) * sig2bs[0]
         V = gZ_train @ D @ gZ_train.T + np.eye(gZ_train.shape[0]) * sig2e
         V_inv_y = np.linalg.solve(V, y_train.values - y_pred_tr)
